@@ -46,7 +46,7 @@ Key design choices:
 
 3. **Run the script**
    ```bash
-   python performance_drivers.py --target IBE.MC --months 12
+   python performance_drivers.py --target <target> --months <6 or 12>
    ```
    Flags:
    - `--target`: overrides the dependent equity (defaults to whatever you put in `CONFIG["default_target"]`).
