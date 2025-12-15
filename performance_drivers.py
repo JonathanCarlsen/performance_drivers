@@ -12,6 +12,9 @@ Accepted lookback windows: 6, 12, or 24 months.
 
 Missing tickers in the configuration are skipped automatically with warnings,
 and the rebased chart highlights the most correlated available drivers.
+
+You can also set CONFIG["default_target"] to change the dependent equity
+without passing --target each time; the CLI flag still overrides it when used.
 """
 
 from __future__ import annotations
@@ -36,30 +39,36 @@ from matplotlib import pyplot as plt
 # --------------------------------------------------------------------------- #
 
 CONFIG = {
+    "default_target": "SOFI",
     "default_months": 12,
     "rebased_top_n": 3,
     "groups": {
         "Market": [
             {"name": "global_market", "ticker": "URTH"},
-            {"name": "regional_market", "ticker": "^STOXX50E"},
-            {"name": "local_market", "ticker": "^IBEX"},
+            {"name": "regional_market", "ticker": "^SPX"},
+            {"name": "local_market", "ticker": ""},
         ],
         "Sector": [
-            {"name": "utilities_europe", "ticker": "EXH9.DE"},
-            {"name": "utilities_us", "ticker": "XLU"},
+            {"name": "Sector", "ticker": ""},
+            {"name": "Industry", "ticker": ""},
+            {"name": "US Financials", "ticker": "^SP500-40"},
+            {"name": "Information Technology Index Fund", "ticker": "VGT"},
         ],
         "Macro": [
-            {"name": "eur_gbp", "ticker": "EURGBP=X"},
-            {"name": "eur_usd", "ticker": "EURUSD=X"},
-            {"name": "clean_energy", "ticker": "INRG.L"},
-            {"name": "rates_2y_us", "ticker": "^IRX"},
-            {"name": "rates_10y_us", "ticker": "^TNX"},
+            {"name": "EUR_USD", "ticker": "EURUSD=X"},
+            {"name": "Ishares_tips", "ticker": "TIP"},
+            {"name": "Rates_2y_us", "ticker": "^IRX"},
+            {"name": "Rates_10y_us", "ticker": "^TNX"},
+            {"name": "Bitcoin", "ticker": "BTC-USD"},
         ],
         "Style": [
-            {"name": "momentum", "ticker": "MTUM"},
-            {"name": "low_volatility", "ticker": "USMV"},
-            {"name": "quality", "ticker": "QUAL"},
-            {"name": "size", "ticker": "SIZE"},
+            {"name": "Momentum", "ticker": "MTUM"},
+            {"name": "Low Vol", "ticker": "USMV"},
+            {"name": "Quality", "ticker": "QUAL"},
+            {"name": "Size", "ticker": "SIZE"},
+            {"name": "Retail: VanEck Social Sentiment ETF", "ticker": "BUZZ"},
+            {"name": "Retail: ARK Innovation", "ticker": "ARKK"},
+            {"name": "Robinhood", "ticker": "HOOD"},
         ],
     },
 }
@@ -129,8 +138,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target",
         type=str,
-        default="IBE.MC",
-        help="Ticker for the dependent variable (default: %(default)s)",
+        default=CONFIG.get("default_target"),
+        help="Ticker for the dependent variable (default set in CONFIG)",
     )
     parser.add_argument(
         "--months",

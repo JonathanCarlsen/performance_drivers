@@ -41,7 +41,7 @@ Key design choices:
    ```
 
 2. **Edit `CONFIG` (optional)**
-   - Set the default target ticker, change factor groups, or add new entries using the `{ "name": "...", "ticker": "..." }` format.
+   - Set the default target ticker via `CONFIG["default_target"]`, change factor groups, or add new entries using the `{ "name": "...", "ticker": "..." }` format.
    - Adjust `rebased_top_n` to control how many highly correlated drivers appear in the rebased chart.
 
 3. **Run the script**
@@ -49,7 +49,7 @@ Key design choices:
    python performance_drivers.py --target IBE.MC --months 12
    ```
    Flags:
-   - `--target` (default `IBE.MC`): the dependent equity.
+   - `--target`: overrides the dependent equity (defaults to whatever you put in `CONFIG["default_target"]`).
    - `--months` (choices: 6, 12, 24): lookback window for the regression; longer windows are still downloaded for correlation analysis.
 
 4. **Interpret the outputs**
@@ -63,4 +63,3 @@ Key design choices:
    - Re-run the script; no other edits required.
 
 This setup lets you quickly replicate an analyst-friendly attribution pack for any listed equity without touching R or Excel. Feel free to extend it with additional factor groups, custom lags, or alternative importance metrics if you need to scale the workflow further.
-
