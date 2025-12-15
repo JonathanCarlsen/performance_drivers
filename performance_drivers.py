@@ -31,6 +31,9 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import yfinance as yf
+import matplotlib
+
+matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 
 
@@ -129,6 +132,18 @@ class DriverConfig:
             else:
                 missing.append((name, ticker))
         return mapping, group_lookup, missing
+
+
+@dataclass
+class AnalysisResult:
+    group_shares: pd.DataFrame
+    total_r2: float
+    corr_table: pd.DataFrame
+    group_order: List[str]
+    rebased_prices: pd.DataFrame
+    rebased_series: List[str]
+    warnings: List[str]
+    model_summary: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -284,6 +299,82 @@ def select_rebased_series(
     return tickers
 
 
+def run_analysis(target: str, months: int) -> AnalysisResult:
+    driver_config = DriverConfig(
+        target=target,
+        groups=CONFIG["groups"],
+        rebased_top_n=CONFIG["rebased_top_n"],
+    )
+
+    history_start, analysis_start, end = determine_date_range(months, CORRELATION_WINDOWS)
+    tickers_needed = {driver_config.target, *driver_config.factor_tickers}
+
+    prices = download_prices(tickers_needed, history_start, end)
+    log_returns = compute_log_returns(prices)
+    model_returns = log_returns.loc[log_returns.index >= analysis_start]
+
+    warnings: List[str] = []
+    active_mapping, group_lookup, missing_defs = driver_config.active_predictors(log_returns.columns)
+    for name, ticker in missing_defs:
+        warnings.append(f"No usable data for '{name}' ({ticker}); excluding from regression.")
+
+    usable_mapping: Dict[str, str] = {}
+    for predictor, ticker in active_mapping.items():
+        series = model_returns[ticker].dropna()
+        if series.empty:
+            warnings.append(f"Ticker '{ticker}' for '{predictor}' has no return history in the selected window; removing.")
+        else:
+            usable_mapping[predictor] = ticker
+
+    if not usable_mapping:
+        raise RuntimeError("No predictors with available return history. Adjust configuration or date range.")
+
+    usable_group_lookup = {predictor: group_lookup[predictor] for predictor in usable_mapping}
+
+    model_df = build_model_frame(model_returns, driver_config, usable_mapping)
+
+    model = fit_ols(model_df)
+    model_summary = model.summary().as_text()
+
+    shapley_values, total_r2 = compute_shapley_r2(model_df)
+    group_shares = summarize_groups(shapley_values, usable_group_lookup)
+    group_shares = (
+        group_shares.set_index("group")
+        .reindex(driver_config.group_order, fill_value=0)
+        .reset_index()
+    )
+
+    corr_df = compute_factor_correlations(
+        log_returns,
+        usable_mapping,
+        driver_config.target,
+        CORRELATION_WINDOWS,
+        end,
+    )
+    corr_table = build_correlation_table(
+        corr_df,
+        usable_group_lookup,
+        usable_mapping,
+        driver_config.group_order,
+        CORRELATION_WINDOWS,
+    )
+
+    rebased_series = select_rebased_series(model_df, usable_mapping, driver_config.target, driver_config.rebased_top_n)
+    prices_for_rebase = prices.loc[prices.index >= analysis_start, rebased_series]
+    rebased_prices = prices_for_rebase.dropna()
+
+    return AnalysisResult(
+        group_shares=group_shares,
+        total_r2=total_r2,
+        corr_table=corr_table,
+        group_order=driver_config.group_order,
+        rebased_prices=rebased_prices,
+        rebased_series=rebased_series,
+        warnings=warnings,
+        model_summary=model_summary,
+    )
+
+
 def compute_factor_correlations(
     log_returns: pd.DataFrame,
     usable_mapping: Dict[str, str],
@@ -342,14 +433,12 @@ def build_correlation_table(
     return pd.DataFrame(display_rows)
 
 
-def plot_performance_overview(
+
+def create_bar_chart_figure(
     group_shares: pd.DataFrame,
     total_r2: float,
-    corr_table: pd.DataFrame,
-    windows: Iterable[int],
     group_order: List[str],
-    output_dir: Path,
-) -> None:
+) -> plt.Figure:
     bars = group_shares.copy()
     bars["pct"] = 100 * bars["share"]
     order_map = {group: idx for idx, group in enumerate(group_order)}
@@ -363,10 +452,7 @@ def plot_performance_overview(
         ignore_index=True,
     )
 
-    fig = plt.figure(figsize=(9, 8.5))
-    gs = fig.add_gridspec(2, 1, height_ratios=[1.2, 1.0], hspace=0.35)
-
-    ax_bar = fig.add_subplot(gs[0])
+    fig, ax_bar = plt.subplots(figsize=(8, 4))
     ax_bar.barh(bars["group"], bars["pct"], color="#d81923")
     for y, pct in zip(bars["group"], bars["pct"]):
         ax_bar.text(pct + 1, y, f"{pct:.0f}%", va="center", fontsize=10)
@@ -376,164 +462,125 @@ def plot_performance_overview(
     ax_bar.set_title("Performance Drivers", loc="left", fontweight="bold")
     ax_bar.spines["top"].set_visible(False)
     ax_bar.spines["right"].set_visible(False)
+    fig.tight_layout()
+    return fig
 
-    ax_table = fig.add_subplot(gs[1])
-    ax_table.set_title("Factor Correlations", loc="left", fontweight="bold")
-    ax_table.axis("off")
+
+def create_corr_table_figure(
+    corr_table: pd.DataFrame,
+    windows: Iterable[int],
+) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(8.5, 5))
+    ax.set_title("Factor Correlations", loc="left", fontweight="bold")
+    ax.axis("off")
     col_labels = ["Group", "Factor", *[f"{w}M Corr" for w in windows]]
     if corr_table.empty:
-        ax_table.text(0.01, 0.6, "Insufficient data to compute correlations.", fontsize=10)
-    else:
-        cell_text = []
-        row_colors = []
-        for idx, row in corr_table.iterrows():
-            cols = [row["Group"], row["Factor"]]
-            for window in windows:
-                val = row[f"{window}M Corr"]
-                cols.append("" if pd.isna(val) else f"{val:.2f}")
-            cell_text.append(cols)
-            row_colors.append("#f6f6f6" if (idx % 2 == 0) else "#ffffff")
+        ax.text(0.01, 0.6, "Insufficient data to compute correlations.", fontsize=10)
+        fig.tight_layout()
+        return fig
 
-        total_rows = len(cell_text) + 1  # include header
-        row_height = 0.065
-        table_height = min(0.9, total_rows * row_height)
-        table_y = max(0.02, 0.5 - table_height / 2)
+    cell_text = []
+    row_colors = []
+    for idx, row in corr_table.iterrows():
+        cols = [row["Group"], row["Factor"]]
+        for window in windows:
+            val = row[f"{window}M Corr"]
+            cols.append("" if pd.isna(val) else f"{val:.2f}")
+        cell_text.append(cols)
+        row_colors.append("#f6f6f6" if (idx % 2 == 0) else "#ffffff")
 
-        table = ax_table.table(
-            cellText=cell_text,
-            colLabels=col_labels,
-            cellLoc="left",
-            colLoc="left",
-            loc="upper left",
-            bbox=[0, table_y, 0.94, table_height],
-        )
-        table.auto_set_font_size(False)
-        table.set_fontsize(9)
-        table.scale(1.05, 1.15)
-        col_widths = {0: 0.08, 1: 0.2}
-        narrow_width = 0.13
-        for (row_idx, col_idx), cell in table.get_celld().items():
-            cell.set_height(row_height)
-            cell.set_width(col_widths.get(col_idx, narrow_width))
-            cell.set_edgecolor("#ccccccff")
-            cell.set_linewidth(0.5)
-            if col_idx >= 1:
-                cell.get_text().set_ha("center")
-            if row_idx == 0:
-                cell.set_facecolor("#d4d4d4")
-                cell.set_height(0.1)
-                cell.set_fontsize(10)
-                cell.set_text_props(weight="bold")
-            else:
-                cell.set_facecolor(row_colors[row_idx - 1])
-    fig.savefig(output_dir / "performance_drivers.png", dpi=250)
-    plt.close(fig)
+    total_rows = len(cell_text) + 1
+    row_height = 0.065
+    table_height = min(0.9, total_rows * row_height)
+    table_y = max(0.02, 0.5 - table_height / 2)
+
+    table = ax.table(
+        cellText=cell_text,
+        colLabels=col_labels,
+        cellLoc="left",
+        colLoc="left",
+        loc="upper left",
+        bbox=[0.01, table_y, 0.98, table_height],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1.05, 1.15)
+    col_widths = {0: 0.08, 1: 0.2}
+    narrow_width = 0.13
+    for (row_idx, col_idx), cell in table.get_celld().items():
+        cell.set_height(row_height)
+        cell.set_width(col_widths.get(col_idx, narrow_width))
+        cell.set_edgecolor("#ccccccff")
+        cell.set_linewidth(0.5)
+        if col_idx >= 1:
+            cell.get_text().set_ha("center")
+        if row_idx == 0:
+            cell.set_facecolor("#d4d4d4")
+            cell.set_height(0.1)
+            cell.set_fontsize(10)
+            cell.set_text_props(weight="bold")
+        else:
+            cell.set_facecolor(row_colors[row_idx - 1])
+    fig.tight_layout()
+    return fig
 
 
-def plot_rebased(prices: pd.DataFrame, series: List[str], output_dir: Path) -> None:
+def create_rebased_figure(prices: pd.DataFrame, series: List[str]) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(7, 4))
     missing = [s for s in series if s not in prices.columns]
     if missing:
-        print(f"Skipping rebased plot because these series are missing: {missing}")
-        return
+        ax.text(0.5, 0.5, f"Missing series: {', '.join(missing)}", ha="center", va="center")
+        ax.axis("off")
+        return fig
 
     subset = prices[series].dropna()
     if subset.empty:
-        print("Skipping rebased plot because no overlapping history exists for selected series.")
-        return
+        ax.text(0.5, 0.5, "Insufficient overlapping history for rebased chart.", ha="center", va="center")
+        ax.axis("off")
+        return fig
     base = subset.iloc[0]
     rebased = subset / base * 100
 
-    fig, ax = plt.subplots(figsize=(7, 4))
     for ticker in series:
         ax.plot(rebased.index, rebased[ticker], linewidth=1.2, label=ticker)
     ax.set_title("Rebased Performance (100 = first common date)")
     ax.set_ylabel("Index level")
     ax.legend(loc="upper left")
-    plt.tight_layout()
-    fig.savefig(output_dir / "rebased_prices.png", dpi=250)
-    plt.close(fig)
+    fig.tight_layout()
+    return fig
 
 
 def main() -> None:
     args = parse_args()
-    driver_config = DriverConfig(
-        target=args.target,
-        groups=CONFIG["groups"],
-        rebased_top_n=CONFIG["rebased_top_n"],
-    )
-
-    history_start, analysis_start, end = determine_date_range(args.months, CORRELATION_WINDOWS)
-    tickers_needed = {driver_config.target, *driver_config.factor_tickers}
-
-    prices = download_prices(tickers_needed, history_start, end)
-    log_returns = compute_log_returns(prices)
-    model_returns = log_returns.loc[log_returns.index >= analysis_start]
-
-    active_mapping, group_lookup, missing_defs = driver_config.active_predictors(log_returns.columns)
-    for name, ticker in missing_defs:
-        print(f"Warning: no usable data for '{name}' ({ticker}); excluding from regression.")
-
-    usable_mapping: Dict[str, str] = {}
-    for predictor, ticker in active_mapping.items():
-        series = log_returns[ticker].dropna()
-        if series.empty:
-            print(f"Warning: ticker '{ticker}' for '{predictor}' has no return history in window; removing.")
-        else:
-            usable_mapping[predictor] = ticker
-
-    if not usable_mapping:
-        raise RuntimeError("No predictors with available return history. Adjust configuration or date range.")
-
-    usable_group_lookup = {predictor: group_lookup[predictor] for predictor in usable_mapping}
-
-    model_df = build_model_frame(model_returns, driver_config, usable_mapping)
-
-    print(f"Observations used for regression: {len(model_df):,}")
-
-    model = fit_ols(model_df)
-    print(model.summary())
-
-    shapley_values, total_r2 = compute_shapley_r2(model_df)
-    group_shares = summarize_groups(shapley_values, usable_group_lookup)
-    group_shares = (
-        group_shares.set_index("group")
-        .reindex(driver_config.group_order, fill_value=0)
-        .reset_index()
-    )
-
-    corr_df = compute_factor_correlations(
-        log_returns,
-        usable_mapping,
-        driver_config.target,
-        CORRELATION_WINDOWS,
-        end,
-    )
-    corr_table = build_correlation_table(
-        corr_df,
-        usable_group_lookup,
-        usable_mapping,
-        driver_config.group_order,
-        CORRELATION_WINDOWS,
-    )
-
-    print("\nGroup contribution table (share of R^2):")
-    print(group_shares.assign(share=lambda df: 100 * df["share"]).rename(columns={"share": "share_%"}))
-    print(f"\nTotal R^2: {total_r2:.3f}")
+    result = run_analysis(args.target, args.months)
 
     output_dir = Path("outputs")
     output_dir.mkdir(exist_ok=True)
 
-    plot_performance_overview(
-        group_shares,
-        total_r2,
-        corr_table,
-        CORRELATION_WINDOWS,
-        driver_config.group_order,
-        output_dir,
-    )
-    rebased_series = select_rebased_series(model_df, usable_mapping, driver_config.target, driver_config.rebased_top_n)
-    prices_for_rebase = prices.loc[prices.index >= analysis_start]
-    plot_rebased(prices_for_rebase, rebased_series, output_dir)
+    if result.warnings:
+        for warning in result.warnings:
+            print(f"Warning: {warning}")
+
+    print(result.model_summary)
+
+    print("\nGroup contribution table (share of R^2):")
+    print(result.group_shares.assign(share=lambda df: 100 * df["share"]).rename(columns={"share": "share_%"}))
+    print(f"\nTotal R^2: {result.total_r2:.3f}")
+
+    bar_fig = create_bar_chart_figure(result.group_shares, result.total_r2, result.group_order)
+    bar_path = output_dir / "driver_bars.png"
+    bar_fig.savefig(bar_path, dpi=250)
+    plt.close(bar_fig)
+
+    table_fig = create_corr_table_figure(result.corr_table, CORRELATION_WINDOWS)
+    table_path = output_dir / "correlation_table.png"
+    table_fig.savefig(table_path, dpi=250)
+    plt.close(table_fig)
+
+    rebased_fig = create_rebased_figure(result.rebased_prices, result.rebased_series)
+    rebased_path = output_dir / "rebased_prices.png"
+    rebased_fig.savefig(rebased_path, dpi=250)
+    plt.close(rebased_fig)
 
     print(f"\nCharts saved in: {output_dir.resolve()}")
 

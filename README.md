@@ -37,7 +37,7 @@ Key design choices:
    python -m venv .venv
    .\.venv\Scripts\activate  # or source .venv/bin/activate on macOS/Linux
    python -m pip install -U pip
-   pip install -r requirements.txt  # or pip install yfinance pandas numpy statsmodels matplotlib
+   pip install -r requirements.txt  # or pip install yfinance pandas numpy statsmodels matplotlib shiny
    ```
 
 2. **Edit `CONFIG` (optional)**
@@ -46,7 +46,7 @@ Key design choices:
 
 3. **Run the script**
    ```bash
-   python performance_drivers.py --target <target> --months <6 or 12>
+   python performance_drivers.py --target <target> --months <6 | 12 | 24>
    ```
    Flags:
    - `--target`: overrides the dependent equity (defaults to whatever you put in `CONFIG["default_target"]`).
@@ -57,7 +57,13 @@ Key design choices:
    - `outputs/performance_drivers.png`: single-page overview suitable for slides or emails.
    - `outputs/rebased_prices.png`: sanity-check chart to see how the target moved versus the strongest drivers.
 
-5. **Swap to a new equity**
+5. **Launch the Shiny dashboard (Python)**
+   ```bash
+   shiny run --reload app.py
+   ```
+   - The app renders the bar chart, correlation table, rebased comparison, and OLS summary using the current CONFIG defaults. Update `CONFIG` in `performance_drivers.py` and restart the app whenever you want to analyze a different equity or factor set.
+
+6. **Swap to a new equity**
    - Update `CONFIG["default_target"]` (or just pass `--target NEW_TICKER` on the command line).
    - Add/remove factor entries as needed; the script automatically handles missing data.
    - Re-run the script; no other edits required.
