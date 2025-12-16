@@ -341,9 +341,8 @@ def run_analysis(
 
     model = fit_ols(model_df)
     model_summary = model.summary().as_text()
-    magnitude_scores = compute_magnitude_scores(model, usable_mapping.keys())
-
     shapley_values, total_r2 = compute_shapley_r2(model_df)
+    shapley_by_predictor = shapley_values.to_dict()
     group_shares = summarize_groups(shapley_values, usable_group_lookup)
     group_shares = (
         group_shares.set_index("group")
@@ -364,7 +363,7 @@ def run_analysis(
         usable_mapping,
         driver_config.group_order,
         CORRELATION_WINDOWS,
-        magnitude_scores,
+        shapley_by_predictor,
     )
 
     rebased_series = select_rebased_series(model_df, usable_mapping, driver_config.target, driver_config.rebased_top_n)
@@ -414,9 +413,9 @@ def build_correlation_table(
     mapping: Dict[str, str],
     group_order: List[str],
     windows: Iterable[int],
-    magnitudes: Dict[str, float],
+    shapley_shares: Dict[str, float],
 ) -> pd.DataFrame:
-    columns = ["Group", "Factor", *[f"{w}M Corr" for w in windows], "Magnitude"]
+    columns = ["Group", "Factor", *[f"{w}M Corr" for w in windows], "Shapley R^2"]
     if corr_df.empty:
         return pd.DataFrame(columns=columns)
 
@@ -435,26 +434,13 @@ def build_correlation_table(
             entry: Dict[str, object] = {
                 "Group": group if idx == 0 else "",
                 "Factor": series["factor"],
-                "Magnitude": magnitudes.get(series["predictor"], np.nan),
+                "Shapley R^2": shapley_shares.get(series["predictor"], np.nan),
             }
             for window in windows:
                 val = series.get(f"{window}M")
                 entry[f"{window}M Corr"] = val
             display_rows.append(entry)
     return pd.DataFrame(display_rows, columns=columns)
-
-
-def compute_magnitude_scores(
-    model: sm.regression.linear_model.RegressionResultsWrapper,
-    predictors: Iterable[str],
-) -> Dict[str, float]:
-    magnitudes: Dict[str, float] = {}
-    for predictor in predictors:
-        if predictor in model.params and predictor in model.tvalues:
-            magnitudes[predictor] = abs(float(model.params[predictor])) * abs(float(model.tvalues[predictor]))
-        else:
-            magnitudes[predictor] = np.nan
-    return magnitudes
 
 
 
@@ -497,7 +483,7 @@ def create_corr_table_figure(
     fig, ax = plt.subplots(figsize=(8.5, 5))
     ax.set_title("Factor Correlations", loc="left", fontweight="bold")
     ax.axis("off")
-    col_labels = ["Group", "Factor", *[f"{w}M Corr" for w in windows], "Magnitude"]
+    col_labels = ["Group", "Factor", *[f"{w}M Corr" for w in windows], "Shapley R^2"]
     if corr_table.empty:
         ax.text(0.01, 0.6, "Insufficient data to compute correlations.", fontsize=10)
         fig.tight_layout()
@@ -510,8 +496,8 @@ def create_corr_table_figure(
         for window in windows:
             val = row[f"{window}M Corr"]
             cols.append("" if pd.isna(val) else f"{val:.2f}")
-        mag_val = row["Magnitude"]
-        cols.append("" if pd.isna(mag_val) else f"{mag_val:.2f}")
+        shapley_val = row["Shapley R^2"]
+        cols.append("" if pd.isna(shapley_val) else f"{shapley_val:.2f}")
         cell_text.append(cols)
         row_colors.append("#f6f6f6" if (idx % 2 == 0) else "#ffffff")
 
@@ -531,7 +517,7 @@ def create_corr_table_figure(
     table.auto_set_font_size(False)
     table.set_fontsize(9)
     table.scale(1.05, 1.15)
-    col_widths = {0: 0.08, 1: 0.2, len(windows) + 2: 0.15}
+    col_widths = {0: 0.08, 1: 0.2, len(windows) + 2: 0.18}
     narrow_width = 0.12
     for (row_idx, col_idx), cell in table.get_celld().items():
         cell.set_height(row_height)
