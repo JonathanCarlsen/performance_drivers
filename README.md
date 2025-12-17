@@ -28,6 +28,12 @@ Key design choices:
 - Missing tickers are skipped gracefully with warnings so experiments don’t break.
 - `CORRELATION_WINDOWS` controls which lookbacks appear in the table. Extend it if you need 3M/24M, etc.
 
+## Shiny Application
+In the branch shiny_app_applied_config: The updated version with an end-to-end shiny application is location. Run app.py with ```python -m shiny run app.py``` 
+The app.py runs the shiny app that imports the computation and outputs from performance_drivers.py. 
+It is possible to add and remove explaining factors in all 4 major factor categories.
+The "Share of Shapley R^2" is the most important explaining output. That explains what specific factor individually explains the most of R^2, and therefore is the best explaining factor for the specific equity,
+
 ## How to use it
 
 1. **Clone and install dependencies**
