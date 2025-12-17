@@ -1,7 +1,7 @@
 # Performance Drivers with Shapley LMG
 
 ## Why this matters
-Understanding what actually drives a stock’s performance is crucial for portfolio construction, attribution, and communication. A simple regression coefficient rarely tells the full story—multicollinearity and overlapping risk factors obscure which themes really explain returns. By decomposing R² into intuitive buckets (market, sector, macro, style) you can:
+Understanding what actually drives a stock’s performance is crucial for portfolio construction, attribution, and communication. A simple regression coefficient rarely tells the full story. Multicollinearity and overlapping risk factors obscure which themes really explain returns. By decomposing R² into intuitive buckets (market, sector, macro, style) you can:
 
 - Translate complex factor exposures into a narrative suitable for investment committees, client decks, or research notes.
 - Spot shifts in dominant drivers (for example, when a utility starts behaving more like a macro play than a sector proxy).
@@ -26,7 +26,7 @@ Key design choices:
 
 - The `CONFIG` block is the only place you need to edit tickers or groups, making the workflow robust when you swap in different equities or factors.
 - Missing tickers are skipped gracefully with warnings so experiments don’t break.
-- `CORRELATION_WINDOWS` controls which lookbacks appear in the table—extend it if you need 3M/24M, etc.
+- `CORRELATION_WINDOWS` controls which lookbacks appear in the table. Extend it if you need 3M/24M, etc.
 
 ## How to use it
 
